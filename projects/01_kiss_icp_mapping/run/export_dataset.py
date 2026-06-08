@@ -97,25 +97,26 @@ def main():
         t = np.array([p.position.x, p.position.y, p.position.z])
         return R, t
 
-    # voxel-hash accumulator for the merged map (memory-safe)
-    vox = {}
+    # collect transformed points, then do ONE vectorized voxel dedup at the end
+    # (fast + memory-bounded even at hundreds of millions of points; a pure-Python
+    # per-point loop is far too slow at that scale).
+    world_chunks, inten_chunks = [], []
     ts_list, n_total = [], 0
     extents_min = np.array([np.inf]*3); extents_max = np.array([-np.inf]*3)
     for idx, c in enumerate(clouds):
         pts = cloud_to_array(c)
         np.save(os.path.join(args.out, "frames", f"{idx:06d}.npy"), pts.astype(np.float32))
         ts = stamp_sec(c.header); ts_list.append(ts); n_total += pts.shape[0]
-        # transform to world and accumulate into voxel grid
+        # transform to world frame
         R, t = pose_at(ts)
         world = (pts[:, :3].astype(np.float64) @ R.T) + t
         if world.size:
             extents_min = np.minimum(extents_min, world.min(axis=0))
             extents_max = np.maximum(extents_max, world.max(axis=0))
-        keys = np.floor(world / args.voxel).astype(np.int64)
-        inten = pts[:, 3]
-        for k, w, ii in zip(map(tuple, keys), world, inten):
-            if k not in vox:
-                vox[k] = (w[0], w[1], w[2], ii)
+        world_chunks.append(world.astype(np.float32))
+        inten_chunks.append(pts[:, 3].astype(np.float32))
+        if idx % 1000 == 0:
+            print(f"  transformed {idx}/{len(clouds)}")
 
     # write poses (TUM)
     with open(os.path.join(args.out, "poses_tum.txt"), "w") as f:
@@ -126,16 +127,28 @@ def main():
     with open(os.path.join(args.out, "timestamps.txt"), "w") as f:
         f.write("\n".join(f"{t:.6f}" for t in ts_list))
 
+    # vectorized voxel dedup of the merged map (keep first occurrence per voxel)
+    if world_chunks:
+        W = np.concatenate(world_chunks); del world_chunks
+        I = np.concatenate(inten_chunks); del inten_chunks
+        g = np.floor(W / args.voxel).astype(np.int64)
+        g -= g.min(axis=0)
+        span = g.max(axis=0) + 1
+        assert int(span[0])*int(span[1])*int(span[2]) < 9_000_000_000_000_000_000, "voxel grid too large to pack"
+        packed = (g[:, 0]*span[1] + g[:, 1])*span[2] + g[:, 2]
+        _, ui = np.unique(packed, return_index=True)
+        mp = np.column_stack([W[ui], I[ui]]).astype(np.float64)
+    else:
+        mp = np.zeros((0, 4))
+
     # write merged map PLY (ascii, x y z intensity)
-    mp = np.array(list(vox.values()), dtype=np.float64) if vox else np.zeros((0, 4))
     ply = os.path.join(args.out, "map.ply")
     with open(ply, "w") as f:
         f.write("ply\nformat ascii 1.0\n")
         f.write(f"element vertex {mp.shape[0]}\n")
         f.write("property float x\nproperty float y\nproperty float z\nproperty float intensity\n")
         f.write("end_header\n")
-        for r in mp:
-            f.write(f"{r[0]:.4f} {r[1]:.4f} {r[2]:.4f} {r[3]:.2f}\n")
+        np.savetxt(f, mp, fmt="%.4f %.4f %.4f %.2f")
 
     meta = {
         "frames": len(clouds), "odom_msgs": len(odoms),

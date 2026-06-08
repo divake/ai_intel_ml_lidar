@@ -124,3 +124,25 @@ First real end-to-end deliverable. Recorded with `record_run.sh lab_room1`, expo
 - `map_topdown.png` — top-down preview (height-colored + white robot path), generated headlessly with conda python + matplotlib/open3d (no Foxglove needed). Room shows as a dense box; doorway shows as a thin streak.
 
 **Observations:** old `test_drive` (2.5 GB, had dead-LiDAR gap + redundant `/kiss/local_map`) deleted. Next target: engineering-building corridor (same pipeline, longer drive) for the team demo.
+
+**Rendering note (lab + later runs):** the first preview was height-colored + over-voxeled (5 cm → looked "painted"). The good look is **intensity coloring + finer voxel**, produced by `render_run.sh <name> [voxel]` → `<name>_render/` with `map_dense.ply`, `map_topdown_intensity.png`, `map_side_intensity.png`, `map_interactive.html` (orbit in a browser). Foxglove decay-time is a *viewer-only* setting and has **zero** effect on the recorded bag, the dataset, or these renders.
+
+### `corridor1` — whole building floor (2026-06-07)
+First large-scale map — the engineering building floor (rectangular loop + T-junction + central section). Same pipeline as lab_room1.
+
+| Metric | Value |
+|---|---|
+| Bag | `results/corridor1/` (4.8 GiB, mcap) |
+| Duration | 1118 s (18.6 min), 11,185 frames @ 10 Hz |
+| Topics | `/rslidar_points` (11,185), `/kiss/odometry` (11,093), `/tf` |
+| Raw points | 318.5 M |
+| Path driven | **392.5 m**; XY driven extent 86 × 39 m |
+| Loop closure error | 4.0 m over 392 m ≈ **1.0 % drift** (LiDAR-only, no IMU) |
+| Z drift | 3.4 m (floor appears sloped in side view — expected for LiDAR-only over long runs) |
+| Map extent | X 132.6 m, Y 72.7 m, Z 10.0 m (incl. LiDAR reach) |
+| Dataset | `results/corridor1_dataset/` (6.1 GB) — 11,185 `.npy` frames + poses + map.ply |
+| Render | `results/corridor1_render/` (1.3 GB) — 46.1 M-pt map @ 2.5 cm + PNGs + 13 MB interactive HTML |
+
+**Performance fix:** the export/render voxel merge was a pure-Python per-point loop (fine at 72 M pts, far too slow at 318 M). Replaced with a **vectorized packed-int64 voxel dedup** (`export_dataset.py`, `render_map.py`) — both now finish in minutes on 318 M points within ~54 GB RAM. `render_map.py` titles now use the run name (was hardcoded "lab_room1").
+
+**To reduce drift later:** add IMU / wheel odometry fusion, or use a SLAM backend with loop closure — KISS-ICP is pure frame-to-frame odometry with no global optimization.

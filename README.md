@@ -37,10 +37,10 @@ dense, intensity-colored 3D map **offline** and export an ML-ready dataset
 
 | Top-down (intensity) | Side view (intensity) |
 |---|---|
-| ![top-down](projects/01_kiss_icp_mapping/showcase/map_topdown_intensity.png) | ![side](projects/01_kiss_icp_mapping/showcase/map_side_intensity.png) |
+| ![top-down](projects/01_kiss_icp_mapping/showcase/lab_room1/map_topdown_intensity.png) | ![side](projects/01_kiss_icp_mapping/showcase/lab_room1/map_side_intensity.png) |
 
 ▶ **Interactive 3D:** download
-[`showcase/map_interactive.html`](projects/01_kiss_icp_mapping/showcase/map_interactive.html)
+[`showcase/lab_room1/map_interactive.html`](projects/01_kiss_icp_mapping/showcase/lab_room1/map_interactive.html)
 and open it in any browser to orbit / zoom / inspect the cloud.
 
 In the top-down view the room reads as a rectangle (warm = high-reflectivity
@@ -48,6 +48,22 @@ walls, cool = floor) with the white robot path looped inside; the streak is the
 LiDAR seeing out the doorway. In the side view you can count the 16 individual
 laser beams fanning down the hall — a good reminder of why driving *through* a
 space (close-range, overlapping passes) yields a denser map than staring down it.
+
+**Second map — a whole building floor** (`corridor1`): an 18.6 min, **392 m**
+drive around a rectangular loop with a T-junction and a central section —
+318.5 M raw points, **~1.0 % drift** (4 m loop-closure error over 392 m, LiDAR
+odometry only, no IMU).
+
+| Top-down (intensity) | Side view (intensity) |
+|---|---|
+| ![top-down](projects/01_kiss_icp_mapping/showcase/corridor1/map_topdown_intensity.png) | ![side](projects/01_kiss_icp_mapping/showcase/corridor1/map_side_intensity.png) |
+
+▶ **Interactive 3D:** download
+[`showcase/corridor1/map_interactive.html`](projects/01_kiss_icp_mapping/showcase/corridor1/map_interactive.html)
+and open it in any browser. The rectangular loop + T-junction are clearly
+traced by the white path; concentric rings are the LiDAR's beams sweeping open
+floor at range, and the gentle vertical slope in the side view is the expected
+Z-drift of LiDAR-only odometry over a long single-floor run.
 
 ---
 
