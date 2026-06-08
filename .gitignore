@@ -1,0 +1,34 @@
+# ============================================================
+#  Large data & generated artifacts (rebuilt offline from bags)
+# ============================================================
+**/results/
+*.mcap
+*.ply
+*.pcd
+*.npy
+__pycache__/
+*.pyc
+*.pyo
+
+# Throwaway diagnostic dumps
+*_verify.txt
+
+# Allow the curated showcase folder (small PNGs + interactive HTML)
+!**/showcase/
+!**/showcase/**
+
+# ============================================================
+#  Reference screenshots (third-party / not our data)
+# ============================================================
+image_*.png
+**/image_*.png
+
+# ============================================================
+#  Files that contain local connection credentials (VNC password,
+#  tailnet address). Kept LOCAL ONLY — never pushed to a public repo.
+#  (Per request: not edited/scrubbed, just excluded.)
+# ============================================================
+HARDWARE.md
+TROUBLESHOOTING.md
+projects/01_kiss_icp_mapping/README.md
+projects/01_kiss_icp_mapping/run/run_kiss_icp.sh
