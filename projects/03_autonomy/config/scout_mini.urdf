@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!--
+  Scout Mini self-model for Nav2 (project 03).
+  Root = base_link (at wheel-axle height). robot_state_publisher publishes the static
+  base_link -> {base_footprint, 4 wheels}. rslidar is NOT a child here: it is the PARENT
+  of base_link via a separate static transform (rslidar -> base_link), because FAST-LIO2
+  tracks the LiDAR. Final tree: odom_lio -> rslidar -> base_link -> {footprint, wheels}.
+  Dimensions: Agilex Scout Mini (body 0.612 x 0.580 x 0.245, wheelbase 0.452, track 0.490,
+  wheel radius 0.0875). See ROBOT_CONTROL_LEARNINGS.md §0.
+-->
+<robot name="scout_mini">
+
+  <!-- Robot body. Collision box = the footprint Nav2 reasons about. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.612 0.580 0.245"/></geometry>
+      <material name="grey"><color rgba="0.4 0.4 0.4 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.612 0.580 0.245"/></geometry>
+    </collision>
+  </link>
+
+  <!-- Ground-projected frame, axle is 0.0875 m above ground. -->
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <origin xyz="0 0 -0.0875" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="base_footprint"/>
+  </joint>
+
+  <!-- 4 wheels (fixed; visual/extent only — nav doesn't need them to spin). -->
+  <link name="front_left_wheel_link">
+    <visual><origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.08" radius="0.0875"/></geometry>
+      <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material></visual>
+  </link>
+  <joint name="front_left_wheel" type="fixed">
+    <origin xyz="0.226 0.245 0" rpy="0 0 0"/>
+    <parent link="base_link"/><child link="front_left_wheel_link"/>
+  </joint>
+
+  <link name="front_right_wheel_link">
+    <visual><origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.08" radius="0.0875"/></geometry>
+      <material name="black"/></visual>
+  </link>
+  <joint name="front_right_wheel" type="fixed">
+    <origin xyz="0.226 -0.245 0" rpy="0 0 0"/>
+    <parent link="base_link"/><child link="front_right_wheel_link"/>
+  </joint>
+
+  <link name="rear_left_wheel_link">
+    <visual><origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.08" radius="0.0875"/></geometry>
+      <material name="black"/></visual>
+  </link>
+  <joint name="rear_left_wheel" type="fixed">
+    <origin xyz="-0.226 0.245 0" rpy="0 0 0"/>
+    <parent link="base_link"/><child link="rear_left_wheel_link"/>
+  </joint>
+
+  <link name="rear_right_wheel_link">
+    <visual><origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.08" radius="0.0875"/></geometry>
+      <material name="black"/></visual>
+  </link>
+  <joint name="rear_right_wheel" type="fixed">
+    <origin xyz="-0.226 -0.245 0" rpy="0 0 0"/>
+    <parent link="base_link"/><child link="rear_right_wheel_link"/>
+  </joint>
+
+</robot>
