@@ -1,0 +1,46 @@
+# spark-fast-lio config — RoboSense Helios 16P + RealSense D455 IMU (project 02)
+#
+# lidar_type 5 = RS16 (our robosense_handler patch in spark_fast_lio):
+#   consumes rslidar_sdk XYZIRT clouds (native ring + absolute float64 per-point
+#   `timestamp`), converts to relative ms offsets, skips NaN padding points.
+# Extrinsic = LiDAR pose w.r.t. IMU (camera_imu_optical_frame: x right, y down,
+#   z forward — verified from gravity on +y at rest). Camera sits directly below
+#   the LiDAR on the same rigid plate (~10 cm, same heading); tape-measure guess,
+#   refined online via extrinsic_est_en.
+/**:
+  ros__parameters:
+    common:
+      time_sync_en: false          # both sensors stamp with the NUC system clock
+      map_frame: "odom_lio"
+
+    preprocess:
+      lidar_type: 5                # RS16 robosense handler (patched)
+      scan_line: 16
+      scan_rate: 10
+      timestamp_unit: 1            # unused by RS16 handler (offsets computed in ms directly)
+      blind: 0.5                   # ignore returns < 0.5 m (robot body / mast)
+
+    mapping:
+      acc_cov: 0.1
+      gyr_cov: 0.1
+      b_acc_cov: 0.003
+      b_gyr_cov: 0.001
+      fov_degree: 360.0
+      det_range: 100.0
+      extrinsic_est_en: true       # refine the tape-measure extrinsic online
+      extrinsic_T: [ 0.0, -0.10, 0.0 ]
+      extrinsic_R: [ 0.0, -1.0,  0.0,
+                     0.0,  0.0, -1.0,
+                     1.0,  0.0,  0.0 ]
+
+    filter_size_map: 0.25
+
+    publish:
+      path_en: true
+      scan_publish_en: true
+      dense_publish_en: false      # downsampled live cloud: lets Foxglove decay-time accumulate a full run without choking (offline map is rebuilt dense from the bag)
+      scan_bodyframe_pub_en: true
+
+    pcd_save:
+      pcd_save_en: false           # maps are rebuilt offline from the bag (project-01 pattern)
+      interval: -1
