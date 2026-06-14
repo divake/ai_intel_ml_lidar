@@ -27,13 +27,23 @@ from nav_msgs.msg import Odometry
 
 
 def cloud_to_array(msg):
-    """PointCloud2 -> (N,5) x,y,z,intensity,ring  (ring derived from organized row)."""
+    """PointCloud2 -> (N,5) x,y,z,intensity,ring  (ring = laser/beam id 0..15).
+
+    The RoboSense Helios 16P publishes an organized (height, width) cloud; the
+    16-beam axis is whichever dimension == 16. PointCloud2 data is row-major
+    (index = row*width + col), so the beam id is:
+      - the COLUMN index (index % width) when width == 16  (azimuth-major layout
+        used by this sensor: height=1800 azimuth steps x width=16 beams), or
+      - the ROW index (index // width) when height == 16    (beam-major layout).
+    """
     raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
     xyzi = raw[:, :16].copy().view(np.float32).reshape(-1, 4)  # x,y,z,intensity at offsets 0,4,8,12
-    # ring = row index for an organized HxW cloud (height=16 beams)
-    if msg.height > 1:
-        ring = np.repeat(np.arange(msg.height, dtype=np.float32), msg.width)
-    else:
+    h, w = msg.height, msg.width
+    if w == 16 and h > 1:        # azimuth-major: beam = column index
+        ring = np.tile(np.arange(w, dtype=np.float32), h)
+    elif h == 16 and w > 1:      # beam-major: beam = row index
+        ring = np.repeat(np.arange(h, dtype=np.float32), w)
+    else:                        # unorganized: no ring available
         ring = np.zeros(xyzi.shape[0], dtype=np.float32)
     pts = np.column_stack([xyzi, ring])
     finite = np.isfinite(pts[:, :3]).all(axis=1)
@@ -155,6 +165,17 @@ def main():
         "total_points_raw": int(n_total), "map_points_voxelized": int(mp.shape[0]),
         "voxel_size_m": args.voxel,
         "frame_fields": ["x", "y", "z", "intensity", "ring"],
+        "frame_dtype": "float32", "frame_shape": "(N, 5)",
+        "field_units": {"x": "m", "y": "m", "z": "m",
+                        "intensity": "0-255 (sensor reflectivity, uncalibrated)",
+                        "ring": "laser/beam id 0-15"},
+        "sensor": "RoboSense Helios 16P (16 beams, 10 Hz)",
+        "coordinate_frame": "sensor frame, ROS REP-103 (x forward, y left, z up), right-handed",
+        "pose_source": "KISS-ICP LiDAR odometry estimate (NOT survey/RTK ground truth); "
+                       "frame-to-frame, no loop closure -> accumulates drift",
+        "pose_format": "poses_tum.txt: timestamp tx ty tz qx qy qz qw (world<-sensor)",
+        "frame_pose_alignment": "frames[i] pairs with the i-th line of poses_tum.txt "
+                                "(nearest-odometry association by timestamp)",
         "map_extent_min": extents_min.tolist() if np.isfinite(extents_min).all() else None,
         "map_extent_max": extents_max.tolist() if np.isfinite(extents_max).all() else None,
         "cloud_topic": args.cloud_topic, "odom_topic": args.odom_topic,
