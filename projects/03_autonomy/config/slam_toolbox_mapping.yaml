@@ -14,6 +14,7 @@ slam_toolbox:
     scan_topic: /scan
 
     resolution: 0.05
+    map_update_interval: 2.0     # publish /map often so the latched final map is fresh
     max_laser_range: 30.0
     minimum_time_between_scans: 0.0
     transform_timeout: 0.3

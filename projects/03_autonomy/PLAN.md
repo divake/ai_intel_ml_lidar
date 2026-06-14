@@ -44,5 +44,30 @@ Base bring-up: `~/robotics_projects/lidar_tools/start_robot_base.sh`. Scout max
 **1.5 m/s / 2.0 rad/s** (we run far below). `/odom` ~50 Hz.
 
 ## Status
-- [x] Phase A scaffolded — building loop-closed map now.
-- [ ] Phase B, C, D.
+- [x] **Phase A DONE — clean loop-closed 3D map via KISS-SLAM** (see pivot below).
+- [ ] Phase B (localization / AMCL — offline-testable on the bag), C (Nav2), D.
+
+## Phase A pivot (2026-06-14): slam_toolbox 2D → KISS-SLAM 3D
+The original 2-stage approach (FAST-LIO2 odometry + `slam_toolbox` 2D loop closure
+on `pointcloud_to_laserscan` scans) produced a **tilted/doubled** map — flattening
+a sloped 3D corridor into 2D is fragile, and the slam_toolbox lifecycle node also
+needs explicit configure→activate (see FINDINGS). **Switched to the right
+architecture: an integrated 3D LiDAR SLAM.**
+
+**Tool = [KISS-SLAM](https://github.com/PRBonn/kiss-slam)** (PRBonn, same family as
+project-01 KISS-ICP): LiDAR-only (no camera/IMU), odometry + loop closure + g2o in
+one. Runs offline on the bag. **Must use a Python 3.12 venv** (`~/kiss_venv`) —
+the conda py3.8 caps `rosbags` at 0.9.x which can't read the Jazzy v9 bag.
+- `run/run_kiss_slam.sh` → `kiss_slam_pipeline <bag> --dataloader rosbag --topic
+  /rslidar_points`; writes per-scan poses (`corridor2_poses.npy`).
+- Result: clean map, end-start gap **1.81 m** — but that gap is mostly a **real
+  physical offset** (user did not return to the exact start) + small drift;
+  KISS-SLAM correctly found 0 auto loop-closures (no true revisit).
+- `run/build_loopclosed_3d_map.py` → **manual loop closure** (snap end→start, linear
+  distribution) + rebuild the dense world map. Gives the gold-standard 3D map.
+- 2D Nav grid projected from the closed 3D map (`results/nav_grid.{pgm,yaml}`) —
+  functional for Nav2 (live LiDAR is the real-time obstacle layer; static grid is
+  for global plan + localization). `octomap` later if a pristine grid is needed.
+
+⚠️ The `--refuse-scans` global-map flag crashes (map_closures version mismatch:
+`align_map_to_local_ground`); we build the map ourselves from the poses instead.
