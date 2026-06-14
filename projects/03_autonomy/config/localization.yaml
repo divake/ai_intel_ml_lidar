@@ -1,0 +1,37 @@
+# Phase B — localization on the KISS-SLAM nav grid (project 03).
+# map_server serves the 2D grid; AMCL localizes the live /scan against it,
+# correcting the odometry drift. Offline test replays corridor2.0 (odom_lio
+# odometry from the bag's /tf); live run uses the Scout's /odom instead.
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    yaml_filename: "/home/nus-ai/divek_nus/ml_lidar/projects/03_autonomy/results/nav_grid.yaml"
+    frame_id: "map"
+    topic_name: "map"
+
+amcl:
+  ros__parameters:
+    use_sim_time: true
+    global_frame_id: "map"
+    odom_frame_id: "odom_lio"        # OFFLINE: FAST-LIO2 odom from the bag. LIVE: change to "odom".
+    base_frame_id: "rslidar"         # treat the LiDAR as base for the offline test
+    scan_topic: "scan"
+    set_initial_pose: true           # robot starts at the map origin (KISS-SLAM frame start)
+    initial_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}
+    laser_model_type: "likelihood_field"
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 30.0
+    laser_min_range: 0.5
+    max_beams: 120
+    min_particles: 500
+    max_particles: 3000
+    update_min_a: 0.1                 # update every 0.1 rad / 0.1 m of motion
+    update_min_d: 0.1
+    resample_interval: 1
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    transform_tolerance: 1.0
+    tf_broadcast: true               # publish map -> odom_lio
+    do_beamskip: false
