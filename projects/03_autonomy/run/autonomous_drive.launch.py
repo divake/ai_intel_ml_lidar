@@ -49,7 +49,11 @@ def generate_launch_description():
              name="pointcloud_to_laserscan",
              remappings=[("cloud_in", "/rslidar_points"), ("scan", "/scan")],
              parameters=[{"use_sim_time": False, "target_frame": "rslidar",
-                          "transform_tolerance": 0.1, "min_height": -0.5, "max_height": 1.5,
+                          # rslidar sits ~0.39 m above the floor. Band is in the rslidar
+                          # frame: min_height -0.20 (~0.19 m above floor) EXCLUDES floor
+                          # returns (the fake-obstacle ring that boxed MPPI in); max 1.0
+                          # keeps the wall band, drops ceiling/lights.
+                          "transform_tolerance": 0.1, "min_height": -0.20, "max_height": 1.0,
                           "angle_min": -3.14159, "angle_max": 3.14159, "angle_increment": 0.0087,
                           "scan_time": 0.1, "range_min": 0.5, "range_max": 30.0, "use_inf": True}],
              output="screen"),

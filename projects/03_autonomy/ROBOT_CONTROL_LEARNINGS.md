@@ -144,6 +144,45 @@ controller_server(cmd_vel_nav) → velocity_smoother(cmd_vel_smoothed) → colli
 
 ---
 
+## 6. Movement debugging — the long night (2026-06-14, ~02:00–03:00)
+
+What we **fixed and proved** (banked):
+- **Self-model works.** With the URDF + one-tree fix, the robot drives **dead straight**
+  (0.01 m lateral over a run). The old veer-into-the-wall is gone.
+- **Perception clean.** Floor-exclusion (`min_height -0.20`) + inflation tuning →
+  forward costmap channel **0/115 blocked** in a clear corridor.
+- **Velocity pipeline clean.** `cmd_vel_nav` == `cmd_vel_smoothed` == `cmd_vel`.
+
+What we **did NOT crack** — getting a clean brisk autonomous drive:
+- **MPPI crawls (~0.016–0.064 m/s) even on a clear path.** It's a cost *equilibrium*:
+  forward-reward (PathFollow) vs speed-penalty (`gamma`) vs short planning horizon
+  (`time_steps × model_dt × vx_max` ≈ 0.4 m at our safe low `vx_max`). Boosting
+  PathFollow 5→20 and gamma 0.015→0.008 raised speed 0.016→0.064 but never to full
+  speed. **Conclusion: MPPI needs careful OFFLINE tuning, not live trial-and-error on
+  the robot.** Canonical MPPI configs only drive briskly because they run `vx_max 0.5`.
+  MPPI config preserved in `config/nav2_live_mppi.yaml`.
+- **RPP (`config/nav2_live.yaml` now) commands a SET speed (no crawl)** — the right tool
+  for a basic reliable drive — but it **refused to move (cmd 0)** from the test spot.
+
+**THE KEY INSIGHT (root cause of "won't move"):** a correctly-modeled, safe robot
+**will not accelerate when it's hugging a wall.** Both controllers refused for this same
+reason — the robot kept ending up ~0.58 m from a wall (≈0.29 m from its body edge) in a
+narrow (1.76 m) section. That's the **safety working**, not a bug. MPPI crawls, RPP
+freezes; both want a **centered start**.
+
+**Two hard rules learned:**
+1. `inflation_radius` **must be ≥ the footprint inscribed radius** (here 0.30 m) or Nav2
+   collision-checking is invalid and **RPP refuses to move** (logs the warning at
+   costmap configure). We had it at 0.22 → wrong. Now 0.30.
+2. **Always start a drive from the corridor CENTER**, pointed straight. Verify left≈right
+   from `/scan` BEFORE commanding motion. Don't drive out of a wall-hug.
+
+**Untested / next step:** a clean **RPP drive from a centered start** — never got to run
+it (the robot was wall-hugging every attempt). Highest-probability quick win tomorrow.
+
 ## Changelog
 - **2026-06-14:** File created. Diagnosed the disconnected-TF root cause; designed the
   one-tree fix (URDF self-model + static `rslidar→base_link` + disable wheel-odom TF).
+- **2026-06-14 (night):** Added §6. Self-model verified (drives straight); perception +
+  velocity pipeline clean. Movement unsolved: MPPI crawls (tuning), RPP freezes when
+  wall-hugging. Switched controller MPPI→RPP. Rules: inflation ≥ inscribed; start centered.
