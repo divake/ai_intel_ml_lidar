@@ -134,6 +134,16 @@ controller_server(cmd_vel_nav) → velocity_smoother(cmd_vel_smoothed) → colli
 ---
 
 ## 5. Hard-won environment gotchas (cross-ref the big CLAUDE.md + memories)
+- **CAN is DOWN after every reboot → robot won't move.** The Scout talks over `can0`
+  (USB `gs_usb` adapter). After boot `can0` is `state DOWN`. Bring it up BEFORE launching
+  the base: `sudo ip link set can0 up type can bitrate 500000` (Scout = 500 kbit/s; sudo
+  needs no password here). Verify `state UP` / `ERROR-ACTIVE` and `candump can0` shows
+  robot frames (0x251-0x254 motors, 0x241 status).
+  - **ORDER MATTERS:** if the base node (`scout_cmd`) launches while `can0` is down, it
+    prints `Failed to send CAN frame` forever and **TX stays 0** (commands never reach the
+    wheels) — even after you later bring can0 up. Fix = bring up can0 FIRST, then launch
+    the base (or restart the base after can0 is up). Health: `ip -statistics link show can0`
+    → TX climbing; `ros2 topic echo /odom --once` → publishing.
 - **UDP buffer:** `net.core.rmem_max=26214400` (persisted `/etc/sysctl.d/10-rslidar-udp.conf`).
   Reboot resetting this → dropped LiDAR scans → FAST-LIO2 diverges (the "800 km" blowup).
 - **Two Pythons:** ROS/rclpy → `/usr/bin/python3`; rendering → conda `intel_ai`.
@@ -180,7 +190,35 @@ freezes; both want a **centered start**.
 **Untested / next step:** a clean **RPP drive from a centered start** — never got to run
 it (the robot was wall-hugging every attempt). Highest-probability quick win tomorrow.
 
+## 7. The layered rebuild — L0 locomotion box PROVEN (2026-06-15)
+
+After the night of Nav2 trial-and-error, we stepped back and rebuilt **bottom-up, each
+layer tested in isolation** — the opposite of surgical patching. The architecture:
+
+```
+L0  robot_drive   "software remote"        ← PROVEN on hardware
+L1  reactive safety / recovery             "never freeze — always act"   (next)
+L2  navigation: center + follow path + turns
+L3  localization (FAST-LIO2 + taught path)
+```
+
+**Key reframe (ends the "why can't we control it?" worry):** controlling the robot is
+genuinely simple — it's **two numbers** (`linear.x`, `angular.z`); skid-steer math is in
+Agilex firmware. Our old failures were NOT a control gap; they were a *policy* gap — Nav2
+configured to **veto** (freeze near walls) instead of **act** (back off / wait / re-plan).
+Delivery robots (Chicago etc.) aren't magic: their safety layer always produces a *move*,
+never a freeze, with a human teleop as last resort. L1 will be built that way.
+
+**L0 = `locomotion/robot_drive.py`** (+ `locomotion/README.md`). A reusable `RobotDrive`
+class wrapping `/cmd_vel`: clamps, accel ramps, a dead-man watchdog (silent commander →
+coast to 0), steady publish stream, hard-stop on exit. CLI proves each primitive.
+**Verified by eye 2026-06-14:** forward, back, spin-left, spin-right, arcs — all clean.
+TX 1→123 over a 2 s drive confirmed frames reach the wheels. This is the gold standard;
+everything above stands on it.
+
 ## Changelog
+- **2026-06-15:** Added §7 (layered rebuild) + CAN-after-reboot gotcha (§5). **L0
+  locomotion box (`robot_drive`) built and PROVEN on hardware** — all primitives verified.
 - **2026-06-14:** File created. Diagnosed the disconnected-TF root cause; designed the
   one-tree fix (URDF self-model + static `rslidar→base_link` + disable wheel-odom TF).
 - **2026-06-14 (night):** Added §6. Self-model verified (drives straight); perception +
