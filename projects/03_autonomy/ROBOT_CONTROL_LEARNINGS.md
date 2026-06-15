@@ -442,7 +442,8 @@ sees the nose is far off the new corridor and drives a hard correction (`w` satu
 eyes**, like a person. First two corners taken cleanly this way (one a bit wobbly, ~30 s).
 
 ### 9.4 Proven result (the run that worked)
-Drove the straight + multiple corners of the loop, **never within 0.47 m of any wall**,
+Drove the straight + multiple corners of the loop, **never closer than 0.35 m to any wall**
+(run-log verified min 0.351 m run1 / 0.451 m run2 — the earlier "0.47 m" was optimistic),
 self-centered from 0.33 m off → centered, no fishtail, smooth small `w`. Per-cycle log:
 `/tmp/corridor_center.csv` (`t,D_left,D_right,e,phi_deg,front,v,w,state`).
 
@@ -479,7 +480,7 @@ Run data preserved for analysis: `results/corridor_runs/run_*.csv` (per-cycle
 - **2026-06-15:** Added §9 (EYES-ONLY corridor centering — the GOLDEN controller
   `corridor_center.py`). Threw the map out of the steering loop (frame-stale → drove into
   walls) and switched to F1TENTH wall-follow (lateral + heading PD, slow). Proven: drove the
-  straight + corners, never within 0.47 m of a wall, no fishtail. Corners rounded by
+  straight + corners, never closer than ~0.35 m to a wall (verified min 0.351 m), no fishtail. Corners rounded by
   centering itself (heading follows the bend); reactive turn is a backup. Map reserved for
   Phase 2 (ambiguous-junction routing only). `path_follow.py` / `corridor_cruise.py` superseded.
 - **2026-06-15:** Added §8 (FAST-LIO autonomy stack + the corridor problem). Diagnosed the

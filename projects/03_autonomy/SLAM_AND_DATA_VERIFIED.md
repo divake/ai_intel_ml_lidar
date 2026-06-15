@@ -141,4 +141,12 @@ caveats engineered in. Not yet survey-grade (no pose-graph BA) — fine for our 
   `results/verify_overlay_fastlio_vs_kiss.png`
 - Builder: `run/build_loopclosed_fastlio.py` (FAST-LIO) ; `run/build_loopclosed_3d_map.py` (KISS, superseded for the map)
 - Source bag: `../02_fast_lio2/results/corridor2.0/corridor2.0_0.mcap`
-- Taught route: `results/teach_path_fastlio.csv` (251 m, 10 turns — see `taught_route_turns.png`)
+- Taught route: `results/teach_path_fastlio.csv` (251 m, **12 turns, 2 decision junctions** —
+  spine entries are 3-lobe S-bends; see `taught_route_turns.png`, `route_verified_junctions.png`)
+
+## 8. Round-2 re-verification (2026-06-15, 3 fresh adversarial agents)
+All round-1 numbers were **independently reproduced with deliberately different metrics** (data
+PASS; closure PASS — voxel-IoU 4.4–5.5×, Chamfer 3.2–5.7×, double-floor 0.30→0.003 m; walls RMS
+0.06–0.08 m; dedup lossless). Route re-verified (12 turns not 10; passes 130 m apart → ±2 m gating
+trivial). **Deployment red-team = NEEDS-FIX-FIRST** → see `DEPLOYMENT_READINESS.md` (don't drive the
+full figure-8 as first drafted; the corrected plan uses route-memory, not live FAST-LIO).
