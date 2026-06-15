@@ -51,6 +51,7 @@ def _clamp(x, lim):
 class CorridorCruise(Node):
     def __init__(self, drive, *,
                  cruise=0.18, max_w=0.5, kp=1.5, safe=0.6,
+                 kc=0.4, center_db=0.12,
                  slow_dist=2.0, stop_dist=0.8,
                  side_half=0.26, y_path=0.45,
                  max_wall=3.0, hard_min=0.45,
@@ -63,6 +64,8 @@ class CorridorCruise(Node):
         self.max_w = max_w
         self.kp = kp                      # wall-avoidance gain (rad/s per m of intrusion)
         self.safe = safe                  # comfort margin: ease away only inside this (m)
+        self.kc = kc                      # gentle centering gain (the human "barely nudge")
+        self.center_db = center_db        # centering deadband (m): below this offset, go straight
         self.slow_dist = slow_dist        # full speed beyond this (m)
         self.stop_dist = stop_dist        # v ramps to 0 at this front distance (m)
         self.side_half = side_half        # side sector half-angle (rad)
@@ -143,12 +146,22 @@ class CorridorCruise(Node):
         else:
             v, vstate = 0.0, "WAIT"
 
-        # ---------- steering: HUMAN-LIKE wall avoidance, not center-seeking ----------
+        # ---------- steering: gentle continuous centering + strong wall avoidance ----------
         push = 0.0
+        # STRONG: ease away hard once a wall is inside the comfort margin (safety).
         if d_left is not None and d_left < self.safe:
             push -= self.kp * (self.safe - d_left)    # too close LEFT  -> steer right (w<0)
         if d_right is not None and d_right < self.safe:
             push += self.kp * (self.safe - d_right)   # too close RIGHT -> steer left  (w>0)
+        # GENTLE: continuously drift back to center (the human "barely nudge"), with a
+        # deadband so small wobbles don't twitch — and only when BOTH walls are real (not
+        # at an opening). This counteracts the skid-steer heading drift that slowly curves
+        # it into a wall over a long run.
+        if (d_left is not None and d_right is not None
+                and d_left < self.max_wall and d_right < self.max_wall):
+            err = d_left - d_right          # >0 => closer to RIGHT => nudge left (w>0)
+            if abs(err) > self.center_db:
+                push += self.kc * (err - math.copysign(self.center_db, err))
         w = _clamp(push, self.max_w)
 
         # anti-pin: a side wall very close => ease speed so it steers out gently
@@ -157,13 +170,15 @@ class CorridorCruise(Node):
             v = 0.08
 
         # ---------- stuck detection -> trigger RECOVER (reverse is a real option) ----------
-        if vstate == "WAIT":
-            w = 0.0
+        # Trigger on NO FORWARD PROGRESS (v ~ 0), not just the WAIT label — this also
+        # covers the "SLOW limbo" just above stop_dist where v creeps to ~0 but never
+        # flips to WAIT (that left it frozen at the turn last run).
+        if v < 0.03:
             if self.wait_since is None:
                 self.wait_since = now
             elif now - self.wait_since > self.stuck_time:
                 self.state, self.recover_until = "RECOVER", now + self.recover_time
-                self.get_logger().warn("stuck — backing out to find another way")
+                self.get_logger().warn("stuck (no forward progress) — backing out to find another way")
         else:
             self.wait_since = None
 
