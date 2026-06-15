@@ -1,0 +1,63 @@
+digraph ml_lidar {
+  rankdir=TB; nodesep=0.45; ranksep=0.75;
+  fontname="Helvetica"; fontsize=22; labelloc="t";
+  label="ml_lidar  —  System Framework (2026-06-15)\nGREEN = working    ORANGE dashed = to build    BLUE = research north star\n";
+  node [shape=box, style="filled,rounded", fontname="Helvetica", fontsize=13, margin="0.20,0.12"];
+  edge [fontname="Helvetica", fontsize=11, color="#555555"];
+
+  // ---- style classes ----
+  // DONE  : green   NEED : orange dashed   STAR : blue   SENSOR: purple  OUT: yellow
+
+  subgraph cluster_in {
+    label="INPUTS — sensors"; style="rounded,filled"; fillcolor="#f3e5f5"; color="#6a1b9a"; fontcolor="#6a1b9a";
+    lidar [label="LiDAR  (Helios 16P)\n/rslidar_points · 10 Hz\npoint clouds  [DONE]", fillcolor="#e1bee7", color="#6a1b9a"];
+    imu   [label="IMU  (RealSense D455)\n/camera/camera/imu · ~200 Hz\naccel+gyro  [DONE]", fillcolor="#e1bee7", color="#6a1b9a"];
+    enc   [label="Wheel encoders (Scout)\nunreliable → NOT used", fillcolor="#eeeeee", color="#9e9e9e", style="filled,rounded,dashed"];
+  }
+
+  subgraph cluster_drive {
+    label="TRACK 1 — LIVE DRIVING  (reactive, eyes-only)"; style="rounded,filled"; fillcolor="#e8f5e9"; color="#2e7d32"; fontcolor="#2e7d32";
+    cc [label="corridor_center.py  (GOLDEN)\nF1TENTH wall-follow PD centering\nNO map · NO IMU · NO localization\n[DONE ✅]", fillcolor="#c8e6c9", color="#2e7d32", penwidth=2];
+  }
+
+  subgraph cluster_map {
+    label="TRACK 2 — MAPPING & LOCALIZATION  (infrastructure, does NOT steer yet)"; style="rounded,filled"; fillcolor="#fff8e1"; color="#f57f17"; fontcolor="#bf6000";
+    fastlio [label="FAST-LIO2\nLiDAR-inertial ODOMETRY (iterated EKF)\nfuses LiDAR+IMU → pose + live map\n[DONE]", fillcolor="#c8e6c9", color="#2e7d32", penwidth=2];
+    loop    [label="Loop closure (KISS-SLAM)\ncorrects drift → clean map\n= true SLAM  [PARTIAL / NEED]", fillcolor="#ffe0b2", color="#e65100", style="filled,rounded,dashed", penwidth=2];
+    loc     [label="Localization\nmatch live scan ↔ saved map\n(where am I?)  [NEED]", fillcolor="#ffe0b2", color="#e65100", style="filled,rounded,dashed", penwidth=2];
+  }
+
+  subgraph cluster_plan {
+    label="PLANNING  (the 'harness')"; style="rounded,filled"; fillcolor="#fff8e1"; color="#f57f17"; fontcolor="#bf6000";
+    routemem [label="Route memory\n(don't U-turn back)\n[NEED — quick win]", fillcolor="#ffe0b2", color="#e65100", style="filled,rounded,dashed", penwidth=2];
+    astar    [label="A* junction router\npicks taught route at a fork\n→ 'go LEFT here'  [NEED]", fillcolor="#ffe0b2", color="#e65100", style="filled,rounded,dashed", penwidth=2];
+  }
+
+  subgraph cluster_research {
+    label="RESEARCH  (★ north star)"; style="rounded,filled"; fillcolor="#e3f2fd"; color="#0d47a1"; fontcolor="#0d47a1";
+    dataset [label="Recorded dataset\nclouds + IMU + trajectory (rosbag)\n[DONE today]", fillcolor="#c8e6c9", color="#2e7d32", penwidth=2];
+    ml      [label="★ ML + UNCERTAINTY QUANTIFICATION\non LiDAR / point clouds\nTHE GOAL  [NEED]", fillcolor="#bbdefb", color="#0d47a1", penwidth=3];
+  }
+
+  out [label="OUTPUT: /cmd_vel → Scout wheels\nautonomous motion  [DONE ✅]", shape=box, style="filled,rounded", fillcolor="#fff59d", color="#f57f17", penwidth=2];
+
+  // ---- driving track (the only loop that steers TODAY) ----
+  lidar -> cc [label="eyes only", color="#2e7d32", penwidth=2, fontcolor="#2e7d32"];
+  cc -> out [color="#2e7d32", penwidth=2];
+
+  // ---- mapping track ----
+  lidar -> fastlio [color="#2e7d32", penwidth=2];
+  imu   -> fastlio [color="#2e7d32", penwidth=2];
+  fastlio -> loop;
+  fastlio -> dataset [color="#2e7d32", penwidth=2];
+  loop -> loc [style=dashed, color="#e65100"];
+
+  // ---- planning feeds the controller (future link) ----
+  loc -> astar [style=dashed, color="#e65100"];
+  routemem -> cc [style=dashed, color="#e65100", label="break ping-pong"];
+  astar -> cc [style=dashed, color="#e65100", label="junction decision\n(only when ambiguous)", fontcolor="#e65100"];
+
+  // ---- research ----
+  dataset -> ml [style=dashed, color="#0d47a1", penwidth=2];
+  loop -> dataset [style=dotted, color="#999999", label="offline map"];
+}
