@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="corridor">
+    <physics name="1ms" type="ignored"><max_step_size>0.004</max_step_size><real_time_factor>1.0</real_time_factor></physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors"><render_engine>ogre2</render_engine></plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <light type="directional" name="sun"><cast_shadows>true</cast_shadows><pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse><specular>0.2 0.2 0.2 1</specular><direction>-0.4 0.3 -0.9</direction></light>
+    <model name="ground"><static>true</static>
+      <link name="l"><collision name="c"><geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry></collision>
+        <visual name="v"><geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
+          <material><ambient>0.4 0.4 0.4 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse></material></visual></link></model>
+    
+    <model name="outer_bot"><static>true</static>
+      <link name="l"><pose>6.000 -0.900 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>13.900 0.100 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>13.900 0.100 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="outer_top"><static>true</static>
+      <link name="l"><pose>6.000 8.900 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>13.900 0.100 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>13.900 0.100 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="outer_lft"><static>true</static>
+      <link name="l"><pose>-0.900 4.000 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>0.100 9.900 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.100 9.900 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="outer_rgt"><static>true</static>
+      <link name="l"><pose>12.900 4.000 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>0.100 9.900 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.100 9.900 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="inner_bot"><static>true</static>
+      <link name="l"><pose>6.000 0.900 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>10.300 0.100 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>10.300 0.100 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="inner_top"><static>true</static>
+      <link name="l"><pose>6.000 7.100 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>10.300 0.100 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>10.300 0.100 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="inner_lft"><static>true</static>
+      <link name="l"><pose>0.900 4.000 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>0.100 6.300 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.100 6.300 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+    <model name="inner_rgt"><static>true</static>
+      <link name="l"><pose>11.100 4.000 0.750 0 0 0</pose>
+        <collision name="c"><geometry><box><size>0.100 6.300 1.500</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.100 6.300 1.500</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual>
+      </link></model>
+  </world>
+</sdf>
