@@ -63,8 +63,9 @@ def load_path(fn):
 class PathFollow(Node):
     def __init__(self, drive, path_xy, *, odom_topic=DEFAULT_ODOM,
                  cruise=0.18, max_w=0.45, lookahead=0.8,
-                 safe=0.5, k_repel=1.6, hard_min=0.35,
-                 zmin=-0.20, zmax=1.0, range_min=0.5, range_max=30.0,
+                 safe=0.8, k_repel=2.0, hard_min=0.35,
+                 turn_thresh=0.8, k_turn=0.9, chord_wp=4, turn_lookahead_wp=8,
+                 zmin=-0.20, zmax=1.0, range_min=0.4, range_max=30.0,
                  dry_run=False, max_time=120.0):
         super().__init__("path_follow")
         self.drive = drive
@@ -75,6 +76,11 @@ class PathFollow(Node):
         self.safe = safe                  # repel when a side wall is within this (m)
         self.k_repel = k_repel            # repel gain (rad/s per m of intrusion)
         self.hard_min = hard_min          # a wall this close -> also slow down (m)
+        # turn detection from the path's OWN curvature (frame-independent), see _control
+        self.turn_thresh = turn_thresh    # path heading-change (rad) that counts as a corner
+        self.k_turn = k_turn              # arc gain through a corner (rad/s per rad of bend)
+        self.chord_wp = chord_wp          # waypoints per heading chord (~1.6m, noise-robust)
+        self.turn_lookahead_wp = turn_lookahead_wp  # how far ahead to sense the bend (~3.2m)
         self.zmin, self.zmax = zmin, zmax
         self.range_min, self.range_max = range_min, range_max
         self.dry_run = dry_run
@@ -87,6 +93,9 @@ class PathFollow(Node):
         self.d_left = None
         self.d_right = None
         self.reached = False
+        # movement log (line-buffered) — per-cycle left/right vs straight, for tuning
+        self.logf = open("/tmp/pf_movement.csv", "w", buffering=1)
+        self.logf.write("t,x,y,yaw_deg,d_left,d_right,v,w,w_turn,w_repel,state\n")
 
         self.create_subscription(Odometry, odom_topic, self._on_odom, 20)
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
@@ -143,36 +152,52 @@ class PathFollow(Node):
                 self.drive.stop()
             return
 
-        # lookahead point ~Ld ahead -> heading error alpha in robot frame
-        j = self.idx
-        while j < len(self.path) - 1 and math.hypot(self.path[j, 0] - rx, self.path[j, 1] - ry) < self.Ld:
-            j += 1
-        dx, dy = self.path[j, 0] - rx, self.path[j, 1] - ry
-        tx = math.cos(ryaw) * dx + math.sin(ryaw) * dy
-        ty = -math.sin(ryaw) * dx + math.cos(ryaw) * dy
-        alpha = math.atan2(ty, tx)
-
-        # --- direction: pure pursuit toward the path ---
-        w_path = 1.1 * alpha
-
-        # --- safety: repel from a CLOSE side wall (raw LiDAR, SLAM-independent) ---
+        # --- CENTERING (lateral): ALWAYS from the REAL walls (LiDAR, frame-independent) ---
+        # close RIGHT -> steer left (+); close LEFT -> steer right (-). Both walls balanced
+        # => centered. Inside the comfort band (both beyond `safe`) => zero => dead straight.
         w_repel = 0.0
         if self.d_right is not None and self.d_right < self.safe:
-            w_repel += self.k_repel * (self.safe - self.d_right)    # close RIGHT -> steer left
+            w_repel += self.k_repel * (self.safe - self.d_right)
         if self.d_left is not None and self.d_left < self.safe:
-            w_repel -= self.k_repel * (self.safe - self.d_left)     # close LEFT  -> steer right
+            w_repel -= self.k_repel * (self.safe - self.d_left)
 
-        w = _clamp(w_path + w_repel, self.max_w)
+        # --- ROUTE (turns): detect a REAL corner from the PATH's OWN curvature. This is a
+        # relative heading change *within* the path, so it is immune to our lateral offset and
+        # frame rotation. (Bearing-to-a-path-point is NOT usable: a lateral offset on a
+        # straight makes that bearing ~90deg and fakes a turn -> the old into-the-wall bug.)
+        # Compare corridor heading here vs ~turn_lookahead_wp ahead; bend past turn_thresh =>
+        # a corner -> arc that way. Calibrated: straights peak ~33deg, corners 54-91deg. ---
+        def _chord_h(i):
+            a = self.path[max(0, min(i, len(self.path) - 1))]
+            b = self.path[max(0, min(i + self.chord_wp, len(self.path) - 1))]
+            return math.atan2(b[1] - a[1], b[0] - a[0])
+        dh = _chord_h(self.idx + self.turn_lookahead_wp) - _chord_h(self.idx)
+        dh = math.atan2(math.sin(dh), math.cos(dh))        # wrap to [-pi, pi]
 
-        # --- speed: ARC through turns (slow, never stop); extra slow very near a wall ---
-        v = self.cruise * (1.0 - 0.6 * min(1.0, abs(alpha) / 0.9))
+        if abs(dh) > self.turn_thresh:
+            w_turn = _clamp(self.k_turn * dh, self.max_w)   # arc in the path's bend direction
+            w = _clamp(w_turn + 0.5 * w_repel, self.max_w)  # walls stay as a safety net
+            v = self.cruise * 0.5
+            state = "TURN"
+        else:
+            w_turn = 0.0                                    # straight: ignore the path entirely
+            w = _clamp(w_repel, self.max_w)                 # steer PURELY by the walls (center)
+            v = self.cruise if abs(w) < 0.05 else self.cruise * 0.7
+            state = "STRAIGHT" if abs(w) < 0.05 else "CENTER"
+
         nearest = min([d for d in (self.d_left, self.d_right) if d is not None], default=99.0)
         if nearest < self.hard_min:
             v = min(v, 0.08)
-        v = max(v, 0.06)                 # never fully stop -> SLAM keeps tracking
+        v = max(v, 0.08)
 
         if not self.dry_run:
             self.drive.set(v, w)
+
+        # per-cycle movement log (left/right vs straight) for analysis + tuning
+        dlv = self.d_left if self.d_left is not None else -1.0
+        drv = self.d_right if self.d_right is not None else -1.0
+        self.logf.write(f"{now - self.t0:.2f},{rx:.3f},{ry:.3f},{math.degrees(ryaw):.1f},"
+                        f"{dlv:.3f},{drv:.3f},{v:.3f},{w:.3f},{w_turn:.3f},{w_repel:.3f},{state}\n")
 
         if now - self._last_log > 0.4:
             self._last_log = now
@@ -180,9 +205,9 @@ class PathFollow(Node):
             dr = f"{self.d_right:.2f}" if self.d_right is not None else " -- "
             tag = "DRY" if self.dry_run else "RUN"
             self.get_logger().info(
-                f"[{tag}] wp {self.idx}/{len(self.path)} pos=({rx:+.2f},{ry:+.2f}) "
-                f"yaw={math.degrees(ryaw):+5.0f} a={math.degrees(alpha):+5.0f} "
-                f"L={dl} R={dr} -> v={v:+.2f} w={w:+.2f} (path{w_path:+.2f} repel{w_repel:+.2f})")
+                f"[{tag}:{state:8s}] wp {self.idx}/{len(self.path)} pos=({rx:+.2f},{ry:+.2f}) "
+                f"yaw={math.degrees(ryaw):+5.0f} dh={math.degrees(dh):+5.0f} "
+                f"L={dl} R={dr} -> v={v:+.2f} w={w:+.2f}")
 
         if not self.dry_run and (now - self.t0) > self.max_time:
             self.get_logger().warn(f"max_time {self.max_time}s reached — stopping.")
@@ -196,7 +221,7 @@ def main():
     ap.add_argument("--odom-topic", default=DEFAULT_ODOM)
     ap.add_argument("--cruise", type=float, default=0.18)
     ap.add_argument("--lookahead", type=float, default=0.8)
-    ap.add_argument("--safe", type=float, default=0.5)
+    ap.add_argument("--safe", type=float, default=0.65)
     ap.add_argument("--max-time", type=float, default=120.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()

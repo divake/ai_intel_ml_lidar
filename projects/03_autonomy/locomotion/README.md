@@ -1,3 +1,17 @@
+# Locomotion — the autonomy driving stack (L0 → L2)
+
+This folder is the live driving stack. The driver that actually works is **L1**
+`corridor_center.py` — **EYES-ONLY** corridor centering (no map in the loop), built on the
+proven **L0** `robot_drive.py` (the software remote). The map-based `path_follow.py` and the
+position-only `corridor_cruise.py` are **SUPERSEDED** (see why below). Stack map + the
+golden-controller docs + runbook are at the **bottom**.
+
+> **GOLDEN (2026-06-15):** `corridor_center.py` drove the corridor straight + multiple
+> corners and **never came within 0.47 m of a wall** — no fishtailing. **Do not modify it.**
+> Full story: `../ROBOT_CONTROL_LEARNINGS.md` §9.
+
+---
+
 # L0 — Locomotion box (`robot_drive`)
 
 **The one reusable way this robot moves.** Every project uses this, unchanged. It is
@@ -102,8 +116,98 @@ For this isolated L0 test you do **not** need FAST-LIO2 or Nav2 — base only.
 ## Where this sits in the stack
 
 ```
-L0  robot_drive  ← YOU ARE HERE (proven)   "the software remote"
-L1  reactive safety / recovery             "never freeze — always act" (next)
-L2  navigation: center + follow path + turns
-L3  localization (FAST-LIO2 + taught path)
+L0  robot_drive.py      "software remote" (PROVEN)    — clamps + ramps + dead-man
+L1  corridor_center.py  EYES-ONLY centering (GOLDEN)  — F1TENTH wall-follow, NO map  ← the LIVE node
+L1' corridor_cruise.py  reactive, position-only       — SUPERSEDED (fishtails: no heading term)
+L2  path_follow.py      taught-path follower + repel  — SUPERSEDED (map frame is stale → walls)
+        corridor_control.py = shared sim geometry (used by the sims, not the live driver)
 ```
+
+## L1 — `corridor_center.py` (the GOLDEN live driver)
+
+Drives the corridor by the **eyes only** — no map in the steering loop. Per scan it reads
+each side wall with two beams (abeam ±90°, forward ±45°) → perpendicular distance `D` and
+wall angle `alpha` (F1TENTH wall-follow), then steers on BOTH lateral offset and heading:
+`w = kp·(D_left−D_right) + kd·phi` (the `kd·phi` heading term is what stops the fishtailing).
+Slow (`cruise=0.10`) so the 8 Hz LiDAR feedback keeps up; comfort band ⇒ dead straight, no
+twitch. Corners are followed by the centering itself (the heading term tracks the bend); a
+reactive turn-to-the-open-side is a backup for blind/blocked corners. Safety: crawl/steer-
+away/stop as walls close. Per-cycle log → `/tmp/corridor_center.csv`.
+
+```bash
+/usr/bin/python3 corridor_center.py --dry-run            # prints e/phi/w, NO motion
+/usr/bin/python3 corridor_center.py --cruise 0.10        # live (hand on e-stop)
+```
+
+Prereqs: CAN up, scout base up (`publish_odom:=false` is fine — odom is NOT used), RC OFF,
+`/rslidar_points` live. The map is reserved for Phase 2 (ambiguous-junction routing only) —
+see `../ROBOT_CONTROL_LEARNINGS.md` §9.
+
+---
+
+# L2 — `path_follow.py` (the live autonomy node)
+
+Follows a **taught path** (direction) + a **LiDAR wall-repel comfort band** (centering).
+This is what actually drives the corridor. Two simple layers:
+
+1. **Direction from the path.** Localized by FAST-LIO (`/lio/odometry`), pure-pursuit aims
+   at a lookahead point (`lookahead=0.8 m`) on the taught CSV. Handles the route + corners.
+   The path's *heading* is trusted; its exact lateral aim is **not** (the live FAST-LIO
+   frame is somewhat rotated vs the real corridor), so the path-gain is reduced:
+   `w_path = 0.7 * alpha`.
+2. **Centering from the LiDAR (repel-only).** A side wall within `safe` (0.65 m) pushes the
+   robot *away* from it. Repel-only ⇒ **cavity-safe**: a lab-doorway cavity makes a wall
+   *farther*, never closer, so it never steers into the cavity. Inside the comfort band
+   (both walls beyond `safe`) it goes **dead straight at full speed** — no twitching.
+   Speed slows **only while steering**, and to ≤0.08 m/s if a wall is inside `hard_min` (0.35 m).
+
+Defaults: `cruise=0.18 m/s`, `max_w=0.45 rad/s`. A per-cycle log
+(`/tmp/pf_movement.csv`: `t,x,y,yaw,d_left,d_right,v,w,w_path,w_repel,state`) records
+*why* it turned (path vs repel) for tuning after a run.
+
+> **The cavity problem (why direction must come from the path):** reactive
+> wall-*following* (centering on `d_left - d_right`, as in L1 `corridor_cruise.py`) steers
+> **into** a doorway cavity (the receding wall reads as "open"). So: path gives direction,
+> walls give repel/safety only. That is why L1 is superseded for corridors.
+
+> **The corridor problem (why FAST-LIO, not KISS):** LiDAR-only odometry can't measure
+> forward translation in a long smooth corridor (two parallel walls look identical shifted
+> along their length — aperture ambiguity). Proven in sim: 12.5 m driven, 3.7 m tracked.
+> The D455 IMU (via FAST-LIO2) dead-reckons the forward motion the LiDAR can't see. Use
+> `--odom-topic /lio/odometry`, not `/kiss/odometry`. Full story: `../ROBOT_CONTROL_LEARNINGS.md` §8.
+
+`corridor_control.py` is the **shared** control geometry (`plan()`, pure Python) used by
+the Gazebo + python sims AND conceptually by the robot — so what we validate in sim is what
+runs live.
+
+---
+
+# Runbook — full real autonomy drive
+
+Pre-flight: **RC transmitter OFF** (or in CAN/command mode — else the base ignores
+`/cmd_vel` while CAN TX still climbs; status frame `0x211`). Hand on the e-stop.
+
+```bash
+# 1) CAN up FIRST (every reboot)
+sudo ip link set can0 up type can bitrate 500000        # state UP, ERROR-ACTIVE
+
+# 2) FAST-LIO data engine — /lio/odometry (~208 Hz) + /rslidar_points (10 Hz) + IMU (~198 Hz)
+bash ../../02_fast_lio2/run/start_pipeline.sh           # leave running
+
+# 3) Scout base, wheel-odom TF OFF (base_link gets ONE parent — FAST-LIO is the localizer)
+ros2 launch scout_cmd scout_mini.launch.py publish_odom:=false
+
+# 4) Place the robot at the ROUTE START (where teach_path_fastlio.csv was recorded).
+
+# 5) DRY-RUN first (no motion):
+/usr/bin/python3 path_follow.py --path ../results/teach_path_fastlio.csv \
+    --odom-topic /lio/odometry --dry-run
+
+# 6) LIVE (hand on e-stop):
+/usr/bin/python3 path_follow.py --path ../results/teach_path_fastlio.csv \
+    --odom-topic /lio/odometry
+```
+
+Run everything ROS with **`/usr/bin/python3`** (conda's 3.13 breaks rclpy). The full
+hardware-gotcha list (D455 `device busy` → physical replug, LiDAR-rate vs CPU contention,
+CAN order) lives in `../ROBOT_CONTROL_LEARNINGS.md` §8.6.
