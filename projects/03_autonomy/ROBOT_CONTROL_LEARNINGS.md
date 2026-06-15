@@ -453,6 +453,28 @@ left AND right open) to choose the route — classic global-planner (A*/Dijkstra
 reactive (no map). Honest caveat: scan-to-map relocalization in a long featureless corridor
 hits the same aperture ambiguity (§8.2) that broke AMCL — it's a sub-project.
 
+### 9.6 The limit we hit on the long run (2026-06-15 night) — why Phase 2 is next
+On a 25-min supervised drive the golden controller did great: straight ✅, single-opening
+corners ✅ (one even a cavity-corner). It hit its designed limit at **ambiguous topology**:
+- At a **junction** (left branch AND straight both open) it can't *choose the route* — it
+  has no map. It went straight (balanced walls ⇒ centered through the widening); the taught
+  lab route actually went left. Reactive guess = "furthest-open side," not the route.
+- At a **complex multi-cavity section** it **ping-ponged**: front blocked ⇒ backup turn ⇒
+  turned toward the most-open direction, which was *back the way it came* ⇒ U-turn ⇒ back to
+  the junction ⇒ repeat (`TURN_RIGHT` fired 3× at front≈1.0 in the log). **Root cause: the
+  controller is memoryless** — no notion of "I already came from there." Safe the whole time
+  (never hit a wall), just non-productive wandering.
+
+**Phase 2 fix (two levels, lightweight first):**
+1. **Route memory (tiny, no map):** forbid reversing into the corridor just exited ⇒ breaks
+   the ping-pong immediately.
+2. **Map + A\* router (the real one):** at each junction the planned route says "go left
+   here" and overrides the reactive furthest-open guess ⇒ follows the taught route
+   deterministically. This is the *only* job the map has; centering stays 100% eyes.
+
+Run data preserved for analysis: `results/corridor_runs/run_*.csv` (per-cycle
+`t,D_left,D_right,e,phi_deg,front,v,w,state`).
+
 ## Changelog
 - **2026-06-15:** Added §9 (EYES-ONLY corridor centering — the GOLDEN controller
   `corridor_center.py`). Threw the map out of the steering loop (frame-stale → drove into
