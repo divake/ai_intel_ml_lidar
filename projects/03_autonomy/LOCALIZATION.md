@@ -55,13 +55,25 @@ ros2 bag play projects/02_fast_lio2/results/corridor2.0 --clock --storage mcap \
 `ros2 bag play` before a run — two overlapping bag-plays into one FAST-LIO silently corrupt the result.
 Verify single-instance with bracket-grep (`ps -eo cmd | grep -c '[r]osbag2_player'`).
 
-## Option B (tightly-coupled localization mode) — recipe ready, not yet run
-The bundled `fast_lio` has a real `locate_in_prior_map` mode (loads the PCD into the ikd-tree,
-freezes it, runs the full iEKF against it — IMU+scan-to-map fused in one filter). It bootstraps from
-the same `icp_node` `/icp_result`. Needs our RoboSense handler ported into its `preprocess.{h,cpp}`
-(enum `ROBOSENSE=5` + a `robosense_handler` mirroring spark-fast-lio) + `helios16p_localize.yaml`
-(`locate_in_prior_map: true`, `prior_map_path`, `lidar_type: 5`, our extrinsics). Full paste-able
-recipe captured 2026-06-15. **A already clears the robustness bar (0% lost lock), so B is confirmatory.**
+## Option B (tightly-coupled `locate_in_prior_map`) — BUILT + RUN, then CLOSED. A wins.
+Built it fully (RoboSense handler ported into the bundled `fast_lio` `preprocess.{h,cpp}`, enum
+`ROBOSENSE=5`; livox satisfied with a message-only stub package — no SDK; empy-4.2 vs rosidl-Rust
+build bug worked around by hiding the rs generator's discovery resource, reversibly, keeping Nav2
+intact; C++14→17 for Jazzy; IMU subscription QoS → `SensorDataQoS()` best_effort). Launch
+`run/b_localize.launch.py`, config `FAST_LIO/config/helios16p_localize.yaml`.
+
+**Result (corridor2.0 bag, offline):** the `icp_node` bootstrap is fine (fitness ~0.030), fast-LIO
+loads the map and publishes `/lio_loc/odometry`, **but the tightly-coupled scan-to-prior-map match
+fails — repeated `No Effective Points!`** (no plane correspondences) → it dead-reckons on IMU, not
+localizing in the map. **Root cause (the valuable finding):** B bootstraps from a **raw single scan**
+ICP'd against the map; in a long symmetric corridor that is the degenerate case — the raw scan can
+lock to a plausible-but-wrong pose, and the filter then finds no correspondences. **Option A avoids
+this by design** (it ICPs FAST-LIO's already-registered, motion-compensated cloud → tiny offset, no
+ambiguity). Making B robust would require feeding it a registered cloud — i.e. it converges back to A.
+
+**Decision: A is the localization baseline. B is closed** (code kept in `~/ros2_ws` for reference;
+to re-enable rosidl-Rust builds: `sudo mv .../rosidl_generator_packages/rosidl_generator_rs.disabled
+.../rosidl_generator_rs`). No further B debugging — A is robust and validated.
 
 ## Deployment notes
 - Live: start the robot at the SAME physical start as the map origin → initial pose (0,0,0,0) locks
