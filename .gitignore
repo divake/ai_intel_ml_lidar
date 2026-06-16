@@ -13,6 +13,13 @@ __pycache__/
 # Throwaway diagnostic dumps
 *_verify.txt
 
+# Generated TF-tree dumps (ros2 run tf2_tools view_frames)
+frames_*.gv
+frames_*.pdf
+
+# Generated SLAM run output (reproducible from bags)
+**/slam_output/
+
 # Allow the curated showcase folder (small PNGs + interactive HTML)
 !**/showcase/
 !**/showcase/**
