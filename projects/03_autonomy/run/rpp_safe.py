@@ -86,7 +86,7 @@ def _sector_min(ang, rng, a_lo, a_hi, k=5, pct=5.0):
 
 class RPPSafe(Node):
     def __init__(self, drive, *, cruise=0.12, dry_run=False, max_time=60.0,
-                 danger_enter=0.40, danger_exit=0.55, range_floor=0.25):
+                 danger_enter=0.23, danger_exit=0.32, range_floor=0.25):
         super().__init__("rpp_safe")
         self.drive = drive; self.dry = dry_run; self.cruise = cruise; self.max_time = max_time
         self.path = np.loadtxt(PATH_CSV); self.prog = 0
@@ -98,12 +98,10 @@ class RPPSafe(Node):
         self.danger_exit = danger_exit           # all clear beyond this (m) -> back to FOLLOW (hysteresis)
         self.range_floor = range_floor           # see returns down to here (the eyes use 0.4; too coarse for a 0.3 m edge)
         self.mode = "FOLLOW"
-        # ---- stall watchdog ----
-        self._hist = collections.deque()         # (t, x, y, v_cmd) over a sliding window
-        self.stall_win = 4.0                     # s
-        self.stall_cmd = 0.12                    # if commanded travel over the window exceeds this ...
-        self.stall_act = 0.08                    # ... but actual displacement is below this -> wedged
-        self._prev_xy = None                     # divergence guard
+        self._lost_count = 0                      # consecutive ticks the pose is far off the path (collapse)
+        # NOTE: the stall watchdog was REMOVED at the user's request. Driving close to a wall
+        # (without hitting it) is fine; the ONLY safety is the GOLDEN steer-away below. The robot
+        # is never auto-stopped for "not making progress" — only if the pose is hopelessly lost.
         self.tfbuf = tf2_ros.Buffer(); self.tfl = tf2_ros.TransformListener(self.tfbuf, self)
         self._scan = None
         # BEST_EFFORT so this node can NEVER back-pressure FAST-LIO (the corner-divergence cause).
@@ -179,14 +177,21 @@ class RPPSafe(Node):
         right = min([d for d in (c["dmin_r"], c["dmin_fr"]) if d is not None], default=99.0)
         nearest_side = min(left, right)
         away = 0.0
-        if nearest_side < self.danger_enter:
+        # Only steer AWAY when one side is CLEARLY closer. In a symmetric pinch (both walls
+        # equally close) steering "away" would push into the OTHER wall — there, let the
+        # centering term (e≈0 -> straight) carry it through. This kills the narrow-gap bounce.
+        if nearest_side < self.danger_enter and abs(left - right) > 0.08:
             sev = (self.danger_enter - nearest_side) / max(0.05, self.danger_enter - p.crit)
             sev = max(0.0, min(1.0, sev))                            # 0 at danger_enter -> 1 at crit
             away = (p.max_w if right <= left else -p.max_w) * sev    # +w (left) away from a RIGHT obstacle
-        w = max(-p.max_w, min(p.max_w, w_center + away))
-        v = p.crawl                                                  # slow & deliberate in danger
-        # never drive into something dead ahead (rotation to peel off still allowed)
+        GOLDEN_W = 0.22                                              # gentle turn cap -> ARC away, never pivot
+        w = max(-GOLDEN_W, min(GOLDEN_W, w_center + away))
+        # KEEP forward motion so it ARCS off the wall. Crawl + hard turn = a pivot-in-place that
+        # SPINS the robot and wrecks the localization (the run-3 failure). Ease off near a front wall.
         front_eff = min([d for d in (c["dmin_f"], c["front"]) if d is not None], default=99.0)
+        v = 0.10
+        if front_eff < 0.45:
+            v = 0.06
         if front_eff < 0.30:
             v = 0.0
         side = "R" if right <= left else "L"
@@ -218,12 +223,12 @@ class RPPSafe(Node):
         x = y = yaw = None
         if pose is not None:
             x, y, yaw = pose
-            # ---- DIVERGENCE GUARD: localization jumped / left the map => STOP ----
-            jump = math.hypot(x - self._prev_xy[0], y - self._prev_xy[1]) if self._prev_xy else 0.0
-            self._prev_xy = (x, y)
-            in_map = (-62.0 < x < 42.0) and (-20.0 < y < 30.0)
-            if (jump > 1.0 or not in_map) and not self.dry:          # guard is a LIVE safety; dry just observes
-                self._stop(f"divergence jump {jump:.1f} m / pos({x:.0f},{y:.0f})"); return
+            # Only a HOPELESSLY LOST pose stops us (outside the building, e.g. a catastrophic
+            # blowup to 500,660). Normal jitter / close-to-wall driving is allowed — the GOLDEN
+            # net handles physical safety. No per-cycle "jump" trip (that was too twitchy).
+            in_map = (-65.0 < x < 45.0) and (-23.0 < y < 33.0)
+            if (not in_map) and not self.dry:
+                self._stop(f"pose left the map ({x:.0f},{y:.0f}) — lost"); return
 
         # ---- DANGER detection (hysteresis) drives the FOLLOW <-> GOLDEN switch ----
         near = c["nearest"] if c else None
@@ -237,6 +242,11 @@ class RPPSafe(Node):
         if pose is not None:
             _, _, _, cte, near_idx = regulated_pure_pursuit(pose, self.path, self.cfg, self.prog)
             self.prog = near_idx
+            # ---- LOCALIZATION-LOST: pose collapsed far off the path (NOT a slow/close stop —
+            # this is the 13 m teleport-back-to-start failure). Stop rather than drive blind. ----
+            self._lost_count = self._lost_count + 1 if cte > 6.0 else 0
+            if self._lost_count > 12 and not self.dry:
+                self._stop(f"localization lost — pose {cte:.0f} m off the path"); return
 
         # ---- choose command by mode ----
         if self.mode == "GOLDEN" and c is not None:
@@ -250,16 +260,7 @@ class RPPSafe(Node):
             # no localization and not in danger -> hold (don't drive blind)
             v, w, state = 0.0, 0.0, "NO_POSE_HOLD"
 
-        # ---- STALL watchdog: commanded to move but pose not advancing => wedged => STOP ----
-        if pose is not None:
-            self._hist.append((now, x, y, v))
-            while self._hist and now - self._hist[0][0] > self.stall_win:
-                self._hist.popleft()
-            if len(self._hist) > 5 and (now - self._hist[0][0]) > self.stall_win * 0.8:
-                cmd_dist = sum(h[3] for h in self._hist) * 0.1                  # ~v*dt integrated (10 Hz)
-                act_dist = math.hypot(x - self._hist[0][1], y - self._hist[0][2])
-                if cmd_dist > self.stall_cmd and act_dist < self.stall_act and not self.dry:
-                    self._stop(f"stalled: commanded {cmd_dist:.2f} m but moved {act_dist:.2f} m"); return
+        # (stall watchdog removed — no auto-stop for slow/non-advancing pose, per user)
 
         # ---- GOAL: looped back near the start ----
         if pose is not None and self.prog > len(self.path) - 6 and \
@@ -294,8 +295,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cruise", type=float, default=0.12)
     ap.add_argument("--max-time", type=float, default=60.0)
-    ap.add_argument("--danger-enter", type=float, default=0.40)
-    ap.add_argument("--danger-exit", type=float, default=0.55)
+    ap.add_argument("--danger-enter", type=float, default=0.23)   # BELOW the path's normal close-to-wall (~0.29); only a real deviation toward a wall fires GOLDEN
+    ap.add_argument("--danger-exit", type=float, default=0.32)    # hysteresis release
     ap.add_argument("--range-floor", type=float, default=0.25)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
