@@ -1,0 +1,4 @@
+method,PICP,area_conf,area_matched,area_vs_iso_matched
+isotropic,0.8839,0.4682,0.5971,1.0
+fixed-anisotropic,0.8781,0.4183,0.5472,0.9164
+obs (ours),0.8698,0.4342,0.5755,0.9638

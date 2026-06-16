@@ -12,7 +12,7 @@ export_dataset.py. Designed to feel familiar to KITTI / Waymo users.
     for i in ds.split("train"):       # iterate a split (train/val/test)
         ...
 
-Conventions (see DATASET_CARD.md):
+Conventions (see DATASET.md at the repo root for the full dataset card):
   * coordinate frame: ROS REP-103, x forward / y left / z up, metres, right-handed
   * intensity: 0-255, uncalibrated sensor reflectivity
   * ring: laser/beam id 0..15

@@ -1,0 +1,4 @@
+policy,mean_speed,unsafe_events,frac_slowed,n_danger
+ungated,1.0,3886,0.0,3886
+EKF-gated,0.924,3309,0.1,3886
+conformal-gated (ours),0.39,1148,0.643,3886

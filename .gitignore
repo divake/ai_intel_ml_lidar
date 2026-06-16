@@ -6,6 +6,9 @@
 *.ply
 *.pcd
 *.npy
+*.npz
+*.mp4
+projects/04_demo_viz/out/
 __pycache__/
 *.pyc
 *.pyo
@@ -39,3 +42,11 @@ HARDWARE.md
 TROUBLESHOOTING.md
 projects/01_kiss_icp_mapping/README.md
 projects/01_kiss_icp_mapping/run/run_kiss_icp.sh
+
+# ============================================================
+#  Project 06 additions
+# ============================================================
+# User's own papers (copyrighted PDFs — read locally, not for the public repo)
+my_papers/
+# Connection-detail script (real server IP + SSH key path) — keep LOCAL ONLY
+projects/03_autonomy/viz/copy_to_server.sh
