@@ -1,29 +1,22 @@
 #!/usr/bin/python3
-"""LIVE path-following WITH the golden safety net (two clean modes).
+"""LIVE path-following + a SIMPLE wall-repel nudge (no modes — the user wanted less logic).
 
-The user's spec (2026-06-15), after the right-wall protrusion grind:
-  * MOST of the time -> FOLLOW the route (Regulated Pure Pursuit on the localized map pose).
-    This is proven: it rounded the corner that used to diverge.
-  * The MOMENT any wall/edge comes within a DANGER RADIUS (right / left / front), instantly
-    hand control to the GOLDEN eyes-only centering ("wobble to center, drive straight, peel
-    off the wall") — corridor_center.py's proven law. When back OUT of the danger zone, hand
-    control back to FOLLOW. Since the taught path runs down the middle, it rejoins naturally.
+Design (2026-06-15, after run 3 SPUN when a separate "GOLDEN mode" pivoted in place):
+  * ALWAYS follow the route (Regulated Pure Pursuit on the localized map pose). FOLLOW drove
+    the first 11 m of the corridor cleanly and (earlier) rounded the left corner nicely.
+  * Add a GENTLE, CONTINUOUS repel nudge: only when a wall is CLOSER than the path normally
+    runs (repel_dist, below the path's ~0.29 m hug), bias the steering AWAY from it,
+    proportional and capped, WHILE STILL DRIVING FORWARD. So the robot ARCS off a wall —
+    it never crawl-pivots, so it cannot spin (the run-3 failure). No mode switch, no stop.
 
-Why the protrusion grind happened (fixed here):
-  1. The old eyes sampled only a few fixed beams (+-45, +-90) -> a thin protrusion slipped
-     between them and never triggered. FIX: DENSE per-sector minimum range (sees any close
-     point), with a small range floor so we can actually see a 0.3 m edge.
-  2. There was no stall watchdog -> when wedged, the follower kept commanding v=0.12 forward
-     for 90 s. FIX: if forward motion is commanded but the localized pose isn't advancing,
-     STOP. A robot that cannot make progress must stop, never grind.
-  3. The stop on exit raced/failed (base latched the last velocity). FIX: a STOPPING state
-     that streams zeros cleanly for ~0.6 s before shutdown, plus a guarded finally.
+Hard stops ONLY: localization lost (pose collapsed >6 m off the path), something dead ahead
+(<0.30 m), the loop goal, or max_time. No stall watchdog (removed at the user's request —
+driving close to a wall without hitting it is fine).
 
-Steering authority:
-  - FOLLOW: RPP (route) — the ONLY thing that chooses direction / turns at junctions.
-  - GOLDEN: the eyes recenter + hard steer-away from the DENSE nearest obstacle. Never both.
+The dense per-sector LiDAR sensing (sees any close point, incl. off-beam protrusions) feeds
+the repel; clean STOPPING streams zeros so the base can't latch the last velocity.
 
-  /usr/bin/python3 rpp_safe.py --dry-run            # prints clearances + mode, NO motion
+  /usr/bin/python3 rpp_safe.py --dry-run            # prints clearances, NO motion
   /usr/bin/python3 rpp_safe.py --cruise 0.12 --max-time 600
 Run with /usr/bin/python3. Prereqs (LIVE): CAN up, base up (publish_odom:=false), FAST-LIO +
 icp localization live (map->odom_lio), robot parked at the mapped start, RC OFF, hand on e-stop.
@@ -86,34 +79,33 @@ def _sector_min(ang, rng, a_lo, a_hi, k=5, pct=5.0):
 
 class RPPSafe(Node):
     def __init__(self, drive, *, cruise=0.12, dry_run=False, max_time=60.0,
-                 danger_enter=0.23, danger_exit=0.32, range_floor=0.25):
+                 repel_dist=0.25, repel_gain=4.0, range_floor=0.25):
         super().__init__("rpp_safe")
         self.drive = drive; self.dry = dry_run; self.cruise = cruise; self.max_time = max_time
         self.path = np.loadtxt(PATH_CSV); self.prog = 0
-        self.p = ce.EyesParams()                                  # golden thresholds (crit/hard_min/kp/kd...)
+        self.p = ce.EyesParams()                                  # for beams_from_scan (eyes geometry)
         self.cfg = dict(cruise=cruise, max_w=0.45, lookahead=1.0, regulate_radius=0.9,
                         min_speed_frac=0.3, search_win=60)
-        # ---- danger radius (the safety net) ----
-        self.danger_enter = danger_enter        # any wall closer than this (m) -> GOLDEN
-        self.danger_exit = danger_exit           # all clear beyond this (m) -> back to FOLLOW (hysteresis)
-        self.range_floor = range_floor           # see returns down to here (the eyes use 0.4; too coarse for a 0.3 m edge)
-        self.mode = "FOLLOW"
+        # ---- simple wall-repel (no modes): nudge away ONLY when closer than repel_dist ----
+        self.repel_dist = repel_dist             # only nudge when a wall is closer than this (m) — below the path's normal hug
+        self.repel_gain = repel_gain             # nudge strength (rad/s per m inside repel_dist)
+        self.range_floor = range_floor           # see returns down to here
         self._lost_count = 0                      # consecutive ticks the pose is far off the path (collapse)
-        # NOTE: the stall watchdog was REMOVED at the user's request. Driving close to a wall
-        # (without hitting it) is fine; the ONLY safety is the GOLDEN steer-away below. The robot
-        # is never auto-stopped for "not making progress" — only if the pose is hopelessly lost.
+        # No stall watchdog, no mode switch. ALWAYS follow the route; add a gentle continuous
+        # repel that keeps moving forward (arcs off a wall, never pivots/spins). Only hard stops:
+        # localization lost (pose collapsed), something dead ahead, the loop goal, or max_time.
         self.tfbuf = tf2_ros.Buffer(); self.tfl = tf2_ros.TransformListener(self.tfbuf, self)
         self._scan = None
         # BEST_EFFORT so this node can NEVER back-pressure FAST-LIO (the corner-divergence cause).
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=2)
         self.create_subscription(PointCloud2, "/rslidar_points", self._on_cloud, qos)
         self.logf = open("/tmp/rpp_safe.csv", "w", buffering=1)
-        self.logf.write("t,x,y,yaw,prog,cte,Dl,Dr,front,dmin_l,dmin_r,dmin_f,near,v,w,mode,state\n")
+        self.logf.write("t,x,y,yaw,prog,cte,Dl,Dr,front,dmin_l,dmin_r,dmin_f,near,v,w,state\n")
         self.t0 = time.monotonic(); self._stopped = False; self._stopping_t = None; self._last = 0.0
         self.done = False                                         # main loop watches this for a clean exit
         self.create_timer(0.1, self._tick)                        # 10 Hz control
         self.get_logger().info(f"rpp_safe up [{'DRY' if dry_run else 'LIVE'}] cruise={cruise} "
-                               f"danger<{danger_enter}m floor={range_floor}m path={len(self.path)} pts")
+                               f"repel<{repel_dist}m gain={repel_gain} floor={range_floor}m path={len(self.path)} pts")
 
     def _on_cloud(self, msg):
         if not hasattr(self, "_off"):
@@ -153,51 +145,6 @@ class RPPSafe(Node):
         return dict(dmin_f=dmin_f, dmin_l=dmin_l, dmin_r=dmin_r, dmin_fl=dmin_fl, dmin_fr=dmin_fr,
                     nearest=nearest, Dl=Dl, Dr=Dr, phi=phi, front=front)
 
-    def _golden_avoid(self, c):
-        """GOLDEN danger action — the proven golden law (corridor_center.py), but fed DENSE eyes
-        so an off-beam edge can't slip through (the protrusion's lesson). Two terms, both golden:
-          centering  w_center = kp*e + kd*phi   (smooth hold of the centerline, perpendicular beams)
-          steer-away from the DENSE nearest side, RAMPED by closeness (0 at danger_enter -> max at crit)
-        + crawl speed + no forward motion if blocked dead ahead. Purely reactive; no map here."""
-        p = self.p
-        Dl, Dr, phi = c["Dl"], c["Dr"], c["phi"]
-        phi = max(-p.phi_cap, min(p.phi_cap, phi if phi is not None else 0.0))
-        # --- golden centering from the perpendicular beams ---
-        if Dl is not None and Dr is not None:
-            e = Dl - Dr
-        elif Dl is not None:
-            e = Dl - p.target
-        elif Dr is not None:
-            e = p.target - Dr
-        else:
-            e = 0.0
-        w_center = p.kp * e + p.kd * phi
-        # --- DENSE steer-away (whole-side + forward-diagonal nearest), ramped by severity ---
-        left = min([d for d in (c["dmin_l"], c["dmin_fl"]) if d is not None], default=99.0)
-        right = min([d for d in (c["dmin_r"], c["dmin_fr"]) if d is not None], default=99.0)
-        nearest_side = min(left, right)
-        away = 0.0
-        # Only steer AWAY when one side is CLEARLY closer. In a symmetric pinch (both walls
-        # equally close) steering "away" would push into the OTHER wall — there, let the
-        # centering term (e≈0 -> straight) carry it through. This kills the narrow-gap bounce.
-        if nearest_side < self.danger_enter and abs(left - right) > 0.08:
-            sev = (self.danger_enter - nearest_side) / max(0.05, self.danger_enter - p.crit)
-            sev = max(0.0, min(1.0, sev))                            # 0 at danger_enter -> 1 at crit
-            away = (p.max_w if right <= left else -p.max_w) * sev    # +w (left) away from a RIGHT obstacle
-        GOLDEN_W = 0.22                                              # gentle turn cap -> ARC away, never pivot
-        w = max(-GOLDEN_W, min(GOLDEN_W, w_center + away))
-        # KEEP forward motion so it ARCS off the wall. Crawl + hard turn = a pivot-in-place that
-        # SPINS the robot and wrecks the localization (the run-3 failure). Ease off near a front wall.
-        front_eff = min([d for d in (c["dmin_f"], c["front"]) if d is not None], default=99.0)
-        v = 0.10
-        if front_eff < 0.45:
-            v = 0.06
-        if front_eff < 0.30:
-            v = 0.0
-        side = "R" if right <= left else "L"
-        state = f"GOLDEN_AWAY_{side}" if away != 0.0 else "GOLDEN_CENTER"
-        return v, w, state
-
     def _stop(self, reason):
         """Begin a clean STOPPING: stream zeros for ~0.6 s (base decelerates, sees sustained
         zero) then shut down. Avoids the v1 race where the base latched the last velocity."""
@@ -230,12 +177,7 @@ class RPPSafe(Node):
             if (not in_map) and not self.dry:
                 self._stop(f"pose left the map ({x:.0f},{y:.0f}) — lost"); return
 
-        # ---- DANGER detection (hysteresis) drives the FOLLOW <-> GOLDEN switch ----
-        near = c["nearest"] if c else None
-        if self.mode == "FOLLOW" and near is not None and near < self.danger_enter:
-            self.mode = "GOLDEN"; self.get_logger().warn(f"DANGER {near:.2f} m -> GOLDEN recenter")
-        elif self.mode == "GOLDEN" and (near is None or near > self.danger_exit):
-            self.mode = "FOLLOW"; self.get_logger().info(f"clear ({near}) -> back to FOLLOW")
+        near = c["nearest"] if c else None                 # dense nearest (forward hemisphere), for logging
 
         # ---- progress tracking (always, so FOLLOW resumes at the right spot) ----
         cte = float("nan")
@@ -248,17 +190,33 @@ class RPPSafe(Node):
             if self._lost_count > 12 and not self.dry:
                 self._stop(f"localization lost — pose {cte:.0f} m off the path"); return
 
-        # ---- choose command by mode ----
-        if self.mode == "GOLDEN" and c is not None:
-            v, w, state = self._golden_avoid(c)
-        elif pose is not None:
+        # ---- command: ALWAYS follow the route + a GENTLE wall-repel nudge (no mode, no spin) ----
+        if pose is None:
+            v, w, state = 0.0, 0.0, "NO_POSE_HOLD"          # no localization -> hold, never drive blind
+        else:
             v, w, _, _, _ = regulated_pure_pursuit(pose, self.path, self.cfg, self.prog)
             state = "FOLLOW"
             if abs(w) > 0.10:
-                v = min(v, self.cruise * 0.5); state = "FOLLOW_TURN"
-        else:
-            # no localization and not in danger -> hold (don't drive blind)
-            v, w, state = 0.0, 0.0, "NO_POSE_HOLD"
+                v = min(v, self.cruise * 0.5); state = "TURN"
+            # GENTLE continuous repel: only when a wall is CLOSER than the path normally runs
+            # (repel_dist), so it never fights the taught route. Bias steering AWAY, proportional
+            # and capped — and KEEP moving forward so the robot ARCS off the wall (never pivots/spins).
+            if c is not None:
+                left = min([d for d in (c["dmin_l"], c["dmin_fl"]) if d is not None], default=99.0)
+                right = min([d for d in (c["dmin_r"], c["dmin_fr"]) if d is not None], default=99.0)
+                repel = 0.0
+                if left < self.repel_dist:
+                    repel -= self.repel_gain * (self.repel_dist - left)    # steer RIGHT (away from left)
+                if right < self.repel_dist:
+                    repel += self.repel_gain * (self.repel_dist - right)   # steer LEFT (away from right)
+                if repel != 0.0:
+                    w = max(-self.cfg["max_w"], min(self.cfg["max_w"], w + repel))
+                    state = "REPEL"
+                    if min(left, right) < 0.22:            # really close -> ease speed for a tighter arc
+                        v = min(v, 0.07)
+                front_eff = min([d for d in (c["dmin_f"], c["front"]) if d is not None], default=99.0)
+                if front_eff < 0.30:                        # something dead ahead -> no forward (RPP can still turn)
+                    v = 0.0; state = "FRONT_STOP"
 
         # (stall watchdog removed — no auto-stop for slow/non-advancing pose, per user)
 
@@ -278,12 +236,12 @@ class RPPSafe(Node):
         self.logf.write(f"{now-self.t0:.2f},{xs},{ys},{yw},{self.prog},{cte:.2f},"
                         f"{f(cl.get('Dl'))},{f(cl.get('Dr'))},{f(cl.get('front'))},"
                         f"{f(cl.get('dmin_l'))},{f(cl.get('dmin_r'))},{f(cl.get('dmin_f'))},"
-                        f"{f(near)},{v:.3f},{w:.3f},{self.mode},{state}\n")
+                        f"{f(near)},{v:.3f},{w:.3f},{state}\n")
         if now - self._last > 0.4:
             self._last = now
             tag = "DRY" if self.dry else "RUN"
             self.get_logger().info(
-                f"[{tag}:{self.mode}:{state:14s}] pose({xs},{ys}) yaw={yw} prog={self.prog} "
+                f"[{tag}:{state:11s}] pose({xs},{ys}) yaw={yw} prog={self.prog} "
                 f"cte={cte:.2f} | near={f(near)} L={f(cl.get('dmin_l'))} R={f(cl.get('dmin_r'))} "
                 f"F={f(cl.get('dmin_f'))} -> v={v:+.2f} w={w:+.2f}")
 
@@ -295,16 +253,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cruise", type=float, default=0.12)
     ap.add_argument("--max-time", type=float, default=60.0)
-    ap.add_argument("--danger-enter", type=float, default=0.23)   # BELOW the path's normal close-to-wall (~0.29); only a real deviation toward a wall fires GOLDEN
-    ap.add_argument("--danger-exit", type=float, default=0.32)    # hysteresis release
+    ap.add_argument("--repel-dist", type=float, default=0.25)     # only nudge when a wall is closer than this (below the path's normal hug)
+    ap.add_argument("--repel-gain", type=float, default=4.0)      # nudge strength (rad/s per m inside repel-dist)
     ap.add_argument("--range-floor", type=float, default=0.25)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     rclpy.init(); drive = RobotDrive(cmd_timeout=0.7)
     node = RPPSafe(drive, cruise=a.cruise, dry_run=a.dry_run, max_time=a.max_time,
-                   danger_enter=a.danger_enter, danger_exit=a.danger_exit, range_floor=a.range_floor)
+                   repel_dist=a.repel_dist, repel_gain=a.repel_gain, range_floor=a.range_floor)
     if not a.dry_run:
-        print("\n>>> LIVE rpp_safe (FOLLOW + golden danger net) — hand on the e-stop.")
+        print("\n>>> LIVE rpp_safe (FOLLOW + gentle wall-repel nudge) — hand on the e-stop.")
         for i in range(3, 0, -1):
             print(f"    starting in {i} ...", end="\r", flush=True); time.sleep(1)
     exe = MultiThreadedExecutor(num_threads=4); exe.add_node(drive); exe.add_node(node)
